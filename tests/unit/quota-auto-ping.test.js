@@ -496,6 +496,58 @@ describe("quota auto-ping", () => {
       }));
     });
 
+    it("runs a schedule on a connection with the reactive ping switched off", async () => {
+      vi.setSystemTime(new Date("2026-08-20T12:31:00.000Z"));
+      deps.getSettings.mockResolvedValue({
+        codexAutoPing: {
+          connections: { "codex-1": false },
+          schedules: { "codex-1": schedule },
+        },
+      });
+      state.resetCache["codex:codex-1"] = "2026-08-20T20:00:00.000Z";
+      getCodexUsage.mockResolvedValue({
+        quotas: { session: { used: 1, total: 100, remaining: 99, resetAt: "2026-08-20T20:00:00.000Z" } },
+      });
+
+      await runQuotaAutoPingTick(deps, state);
+
+      expect(deps.getExecutor).toHaveBeenCalledTimes(1);
+      expect(deps.updateProviderConnection).toHaveBeenCalledWith("codex-1", expect.objectContaining({
+        lastPingedSlotKey: "2026-08-20#0",
+      }));
+    });
+
+    it("does not fall back to the reactive ping when only the schedule is on", async () => {
+      // resetAt slides, which is exactly what the reactive Codex path pings on.
+      vi.setSystemTime(new Date("2026-08-20T06:00:00.000Z"));
+      deps.getSettings.mockResolvedValue({
+        codexAutoPing: {
+          connections: { "codex-1": false },
+          schedules: { "codex-1": schedule },
+        },
+      });
+      state.resetCache["codex:codex-1"] = "2026-08-20T20:00:00.000Z";
+      getCodexUsage.mockResolvedValue({
+        quotas: { session: { used: 1, total: 100, remaining: 99, resetAt: "2026-08-20T20:01:00.000Z" } },
+      });
+
+      await runQuotaAutoPingTick(deps, state);
+
+      expect(deps.getExecutor).not.toHaveBeenCalled();
+    });
+
+    it("needs the scheduler running for a schedule alone", async () => {
+      const { hasAnyAutoPingEnabled } = await import("../../src/shared/services/quotaAutoPing.js");
+
+      expect(hasAnyAutoPingEnabled({ codexAutoPing: { connections: { "codex-1": false } } })).toBe(false);
+      expect(hasAnyAutoPingEnabled({
+        codexAutoPing: { connections: { "codex-1": false }, schedules: { "codex-1": schedule } },
+      })).toBe(true);
+      expect(hasAnyAutoPingEnabled({
+        codexAutoPing: { connections: {}, schedules: { "codex-1": { ...schedule, enabled: false } } },
+      })).toBe(false);
+    });
+
     it("skips the slot when the quota is exhausted", async () => {
       vi.setSystemTime(new Date("2026-08-20T12:31:00.000Z"));
       deps.getSettings.mockResolvedValue(settingsWithSchedule());

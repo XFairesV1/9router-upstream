@@ -191,7 +191,7 @@ function shouldSkipAfterFailure(state, key, nowMs = Date.now()) {
   return failedAt && nowMs - failedAt < C.failureCooldownMs;
 }
 
-async function pingConnection(conn, provider, providerConfig, handler, deps, state = g, schedule = null) {
+async function pingConnection(conn, provider, providerConfig, handler, deps, state = g, schedule = null, reactive = true) {
   const key = cacheKey(provider, conn.id);
 
   // resetAt is stable for time-based windows; Codex polls every tick because inactive windows slide forward.
@@ -235,7 +235,7 @@ async function pingConnection(conn, provider, providerConfig, handler, deps, sta
   if (slotPending) {
     if (wasPingedRecently(connection, providerConfig.minPingIntervalMs, now)) return;
   } else {
-    if (!resetAt) return;
+    if (!reactive || !resetAt) return;
 
     const lastPingedResetKey = connection.lastPingedResetKey || normalizeResetKey(connection.lastPingedResetAt);
 
@@ -287,14 +287,21 @@ export async function runQuotaAutoPingTick(deps = createDefaultDeps(), state = g
       if (!handler) continue;
 
       const enabledMap = settings?.[providerConfig.settingsKey]?.connections || {};
-      if (Object.keys(enabledMap).length === 0) continue;
+      const scheduleMap = settings?.[providerConfig.settingsKey]?.schedules || {};
+      if (Object.keys(enabledMap).length === 0 && Object.keys(scheduleMap).length === 0) continue;
 
       const conns = await deps.getProviderConnections({ provider, isActive: true });
-      const targets = conns.filter((conn) => conn.authType === "oauth" && enabledMap[conn.id] === true);
+      // A schedule stands on its own: an account can run only on its slots, with the
+      // reactive ping left off.
+      const targets = conns.filter((conn) => (
+        conn.authType === "oauth"
+        && (enabledMap[conn.id] === true || normalizePingSchedule(scheduleMap[conn.id]) !== null)
+      ));
       for (const conn of targets) {
         try {
           const schedule = getConnectionSchedule(settings, providerConfig, conn.id);
-          await pingConnection(conn, provider, providerConfig, handler, deps, state, schedule);
+          const reactive = enabledMap[conn.id] === true;
+          await pingConnection(conn, provider, providerConfig, handler, deps, state, schedule, reactive);
         } catch (e) {
           state.failureCache[cacheKey(provider, conn.id)] = Date.now();
           console.warn(`[AutoPing] ${provider}:${conn.id}: ${e.message}`);
@@ -323,10 +330,16 @@ export function stopQuotaAutoPing() {
   console.log("[AutoPing] scheduler stopped");
 }
 
+// An opted-in account or a single enabled schedule is enough to need the scheduler.
+export function hasAnyAutoPingEnabled(settings) {
+  return Object.values(C.providers).some((providerConfig) => {
+    const config = settings?.[providerConfig.settingsKey];
+    return Object.values(config?.connections || {}).some(Boolean)
+      || Object.values(config?.schedules || {}).some((schedule) => normalizePingSchedule(schedule) !== null);
+  });
+}
+
 export function configureQuotaAutoPing(settings) {
-  const enabled = Object.values(C.providers).some((providerConfig) =>
-    Object.values(settings?.[providerConfig.settingsKey]?.connections || {}).some(Boolean)
-  );
-  if (enabled) startQuotaAutoPing();
+  if (hasAnyAutoPingEnabled(settings)) startQuotaAutoPing();
   else stopQuotaAutoPing();
 }

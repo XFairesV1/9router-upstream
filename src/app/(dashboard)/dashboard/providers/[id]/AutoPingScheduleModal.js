@@ -84,7 +84,7 @@ export default function AutoPingScheduleModal({ isOpen, onClose, onSave, connect
         <p className="text-sm text-text-muted">
           Pings at fixed local times so the 5h windows line up with the hours you actually work.
           The overnight gap is what pulls the next day back onto the anchor.
-          Runs alongside auto-ping{connection?.name ? ` for ${connection.name}` : ""}.
+          Works on its own{connection?.name ? ` for ${connection.name}` : ""}, and runs alongside auto-ping when that is on too.
         </p>
 
         <div className="flex items-center justify-between rounded-[10px] bg-surface-2 px-3 py-2.5">
